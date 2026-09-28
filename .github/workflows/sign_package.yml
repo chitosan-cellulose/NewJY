@@ -1,0 +1,66 @@
+name: Sign and Repackage Cracked Deb
+on:
+  workflow_dispatch:
+    inputs:
+      orig_deb:
+        description: 'Path to ORIGINAL deb in repo'
+        required: false
+        default: 'orig/com.zjx.ldys3_2.16.83_iphoneos-arm64e.deb'
+      patched_dylib:
+        description: 'Path to PATCHED dylib in repo'
+        required: false
+        default: 'patched/SpringBoardService.dylib'
+
+jobs:
+  sign-package:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Extract original deb
+        run: |
+          mkdir -p tree
+          dpkg-deb -R "${{ github.event.inputs.orig_deb }}" tree/
+          echo "--- original control ---"
+          head -5 tree/DEBIAN/control
+
+      - name: Replace dylib with patched version
+        run: |
+          DST="tree/Library/MobileSubstrate/DynamicLibraries/SpringBoardService.dylib"
+          cp -f "${{ github.event.inputs.patched_dylib }}" "$DST"
+          echo "--- sanity: 4 gates must be NOP (1f 20 03 d5) ---"
+          python3 - <<'EOF'
+          p = "tree/Library/MobileSubstrate/DynamicLibraries/SpringBoardService.dylib"
+          b = open(p,'rb').read()
+          ok = True
+          for off,name in [(0xa62184,'A'),(0xa62188,'B'),(0xa626e0,'C'),(0xa62788,'D')]:
+              ins = b[off:off+4]
+              good = ins == bytes([0x1f,0x20,0x03,0xd5])
+              print(f'gate {name} @0x{off:x}: {"NOP ok" if good else "!! "+ins.hex(" ")}')
+              ok = ok and good
+          raise SystemExit(0 if ok else 1)
+          EOF
+
+      - name: Re-sign all binaries (ad-hoc)
+        run: |
+          ldid -S tree/Library/MobileSubstrate/DynamicLibraries/SpringBoardService.dylib
+          ldid -S tree/Library/MobileSubstrate/DynamicLibraries/BackboardService.dylib
+          ldid -S tree/usr/local/bin/ldysdaemon
+          echo "--- signature check ---"
+          codesign -dv tree/Library/MobileSubstrate/DynamicLibraries/SpringBoardService.dylib 2>&1 || true
+
+      - name: Build deb
+        run: |
+          mkdir -p out
+          dpkg-deb -Zgzip -b tree/ out/ldys3-cracked-signed.deb
+          dpkg-deb -I out/ldys3-cracked-signed.deb | head -6
+
+      - name: Upload deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ldys3-cracked-signed-deb
+          path: out/ldys3-cracked-signed.deb
