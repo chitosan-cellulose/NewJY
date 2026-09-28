@@ -58,6 +58,7 @@ jobs:
 
       - name: Build deb
         run: |
+          chmod 755 tree/DEBIAN/preinst tree/DEBIAN/postinst
           mkdir -p out
           dpkg-deb -Zgzip -b tree/ out/ldys3-cracked-signed.deb
           dpkg-deb -I out/ldys3-cracked-signed.deb | head -6
